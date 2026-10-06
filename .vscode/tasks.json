@@ -1,0 +1,22 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-configure",
+            "type": "cmake",
+            "command": "configure",
+            "preset": "Debug"
+        },
+        {
+            "label": "build-clean&rebuild",
+            "type": "cmake",
+            "command": "cleanRebuild",
+            "preset": "Debug"
+        },
+        {
+            "label": "update/flash",
+            "type": "shell",
+            "command": "stm32_programmer_cli -c port=SWD -w build/Debug/PL100.elf"
+        }
+    ],
+}
