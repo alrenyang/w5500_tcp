@@ -9,7 +9,8 @@
 #include "cli.h"
 #include "spi.h"
 #include "wiz5500.h"
-#include "_tcpip.h"
+
+// #include "_tcpip.h"
 
 void apInit(void);
 void apMain(void);

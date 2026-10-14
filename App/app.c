@@ -1,7 +1,6 @@
 
 
 #include "app.h"
-#include "httpServer.h"
 
 static void infoCli(uint8_t argc, const char **argv);
 
@@ -40,8 +39,6 @@ void apMain(void)
 	HAL_Delay(10);
 	DnsInit();
 
-  WebServer_Init();
-
   while (1)
   {
       /* USER CODE END WHILE */
@@ -53,11 +50,6 @@ void apMain(void)
           pre_time = millis();
           ledToggle();
       }
-      Run_Tcp_Client();
-
-      // HTTP 서버 루프 (주기적으로 폴링하며 웹 접속 처리)
-      httpServer_run(0);
-      httpServer_run(1);
 
       cliMain();
   }

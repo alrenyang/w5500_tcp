@@ -51,6 +51,7 @@ file(GLOB_RECURSE SRC_FILES_RECURSE CONFIGURE_DEPENDS
     Middlewares/Ethernet/*.c
     Middlewares/Ethernet/W5500/*.c
     Middlewares/Internet/httpServer/*.c
+    Middlewares/Internet/MQTT/*.c
     App/driver/src/*.c
     # App/lvgl/src/*.c
     App/*.c
@@ -79,7 +80,7 @@ set(EXCLUDE_PATHS
     # "src/ap/touch-gfx/generated/simulator"
     # "src/lib/touchgfx_backup"
     # "src/ap/touch-gfx"
-    "Middlewares/Internet/MQTT"
+    # "Middlewares/Internet/MQTT"
     "Middlewares/Internet/TFTP"
     "Middlewares/Internet/SNMP"
     "Middlewares/Internet/SNTP"
@@ -116,6 +117,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Middlewares/Internet/DNS/
     Middlewares/Application/
     Middlewares/Internet/httpServer/
+    Middlewares/Internet/MQTT/
     App/
     # App/Lvgl/Inc/
     App/driver/Inc/
@@ -139,6 +141,13 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 # 경고 메시지를 에러로 처리하지 않고 무시하도록 설정
 target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE -Wno-format)
 
+# ============================================================
+# Linker Memory Usage
+# ============================================================
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+    -Wl,--print-memory-usage
+)
+
 #추가 설정
 add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E echo "================================ BUILD SUCCESS ================================"
@@ -146,8 +155,8 @@ add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E echo "HEX : ${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.hex"
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.bin
     COMMAND ${CMAKE_COMMAND} -E echo "BIN : ${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.bin"
-    # COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.elf
-    # COMMAND ${CMAKE_COMMAND} -E echo "ELF : ${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.elf"
+    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.elf
+    COMMAND ${CMAKE_COMMAND} -E echo "ELF : ${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.elf"
     COMMAND ${CMAKE_COMMAND} -E echo "=============================================================================="
     COMMENT "Generating hex and bin files"
 )

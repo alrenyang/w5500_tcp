@@ -3,7 +3,9 @@
 
 // 사용할 장비 번호 선택
 #define DEVICE_ID   0
-
+#define MQTTP_CLIENT_ID  "pan01"  // MQTT Client ID (장비별 고유 ID)
+#define MQTTP_SERVER_PORT  1883      // MQTT 서버 포트
+const uint8_t MQTT_TOPIC[]="greenpan/01"; // MQTT Topic (장비별 고유 Topic)
 // 장비별 네트워크 정보 테이블 정의
 typedef struct {
     uint8_t mac[6];
@@ -12,7 +14,7 @@ typedef struct {
 
 const DeviceConfig_t DEVICE_LIST[] = {
     // ID 0번 장비
-    { {0x00, 0x08, 0xDC, 0x85, 0xD9, 0x54}, {192, 168, 10, 20} },
+    { {0x00, 0x08, 0xDC, 0x85, 0xD9, 0x54}, {192, 168, 10, 20} },   //0 번째 mac, ip 주소
     // ID 1번 장비
     { {0x00, 0x08, 0xDC, 0x77, 0x84, 0xA1}, {192, 168, 10, 21} },
     // ID 2번 장비
@@ -90,19 +92,36 @@ wiz_NetInfo gWIZNETINFO  = {
 };
 
 #define ETH_MAX_BUF_SIZE  2048
+#define PUBLISH_MYSELF 0
+
+MQTTClient c;
 
 const uint8_t URL[] = "www.google.com";
 uint8_t dns_server_ip[4] = {168,126,63,1};
 //uint8_t dns_server_ip[4] = {164,124,101,2};
 uint8_t dnsclient_ip[4] = {0,};
 //uint8_t dnsclient_ip[4] = {112, 168, 210, 249};
-unsigned int targetPort = 1883; // mqtt server port
-
+// unsigned int targetPort = 1883; // mqtt server port
 unsigned char targetIP[4] = {112, 168, 210, 249}; // mqtt server IP 112.168.210.249
-
 unsigned char ethBuf0[ETH_MAX_BUF_SIZE];
 
+
 uint8_t IP_TYPE;
+
+unsigned char tempBuffer[2048] = {};
+
+struct opts_struct
+{
+  unsigned char* clientid;
+  int nodelimiter;
+  unsigned char* delimiter;
+  enum QoS qos;
+  unsigned char* username;
+  unsigned char* password;
+  unsigned char* host;
+  int port;
+  int showtopics;
+} opts ={ (unsigned char*)MQTTP_CLIENT_ID, 0, (unsigned char*)"\n", QOS1, NULL, NULL, targetIP, MQTTP_SERVER_PORT, 0 };//must be changed clientid
 
 
 bool w5500Init(void)
@@ -263,3 +282,190 @@ void DnsInit(void)
 #endif
 }
 
+
+void MqttRun(void)
+ {
+	int rc = 0;
+	uint8_t buf[1024] = {0,};
+	
+	Network n;
+	
+    #if PUBLISH_MYSELF == 1
+    uint8_t pubbuf[1024] = {0,};
+	MQTTMessage m;
+	uint32_t ck_timer;
+	uint32_t dist;
+	uint32_t adc_raw;
+    #endif
+
+
+    uartPrintf(_DEF_CH1,">>Mqtt Run...\r\n");
+
+    NewNetwork(&n, 0);
+	HAL_Delay(100);
+
+    HAL_Delay(100);
+    uint8_t Error = ConnectNetwork(&n, targetIP, MQTTP_SERVER_PORT);
+    HAL_Delay(100);
+
+    if(Error == SOCK_OK)
+	{
+		uartPrintf(_DEF_CH1, ">>[ ConnectNetwork... ]\n\r");
+		uartPrintf(_DEF_CH1, "\r");
+	}
+	else
+	{
+		while(1)
+		{
+			uartPrintf(_DEF_CH1, ">>[ ConnectNetwork Error... ]\n\r");
+			NVIC_SystemReset();
+			//forever loop wdg call
+		}
+	}
+
+    MQTTClientInit(&c, &n, 1000, buf, sizeof(buf), tempBuffer, sizeof(tempBuffer));
+	HAL_Delay(100);
+
+	MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
+	data.willFlag = 0;
+	data.MQTTVersion = 3;
+	data.clientID.cstring = (char *)opts.clientid;
+	data.username.cstring = (char *)opts.username;
+	data.password.cstring = (char *)opts.password;
+
+	data.keepAliveInterval = 60;
+	//data.keepAliveInterval = 80;
+	data.cleansession = 1;
+
+    rc = MQTTConnect(&c, &data);
+	HAL_Delay(100);
+	uartPrintf(_DEF_CH1,">>[ Connected Mqtt server ]...%d\r\n", rc);
+	opts.showtopics = 1;
+
+    uartPrintf(_DEF_CH1,">>[ Subscribing to %s ]\r\n", MQTT_TOPIC);
+	rc = MQTTSubscribe(&c, (char *)MQTT_TOPIC, opts.qos, messageArrived);
+	uartPrintf(_DEF_CH1,">>[ Subscribed %d ]\r\n", rc);
+
+    #if PUBLISH_MYSELF == 1
+	m.qos = QOS0;
+	m.retained = 0;
+	m.dup = 0;
+
+	ck_timer = millis();
+	#endif
+
+    while(1)
+	{
+		MQTTYield(&c, data.keepAliveInterval);
+
+		#if PUBLISH_MYSELF == 1
+
+		if(ck_timer + 60000 < millis())
+		{
+			//uartPrintf(_DEF_CH1,"time check to %d\r\n", ck_timer);
+			ck_timer = millis();
+
+			uartPrintf(_DEF_CH1,">>[ Publishing to %s ]\r\n", MQTT_TOPIC);
+			uartPrintf(_DEF_CH1,"-----------------------------------------\r\n");
+			uartPrintf(_DEF_CH1,"\r");
+
+//			sprintf(pubbuf, "Test Mqtt message" );
+			dist = ReadAvgDst();
+			adc_raw = ReadDst();
+
+			cJSON * root = cJSON_CreateObject();
+//			cJSON_AddItemToObject(root,"serial_number", cJSON_CreateString("23040002"));
+			cJSON_AddItemToObject(root,"type", cJSON_CreateString("new"));
+			cJSON_AddItemToObject(root,"value", cJSON_CreateNumber(dist));
+			cJSON_AddItemToObject(root,"raw", cJSON_CreateNumber(adc_raw));
+
+			unsigned char *jsonString = cJSON_Print(root);
+
+//			uartPrintf(_DEF_CH1,(uint8_t *)jsonString);
+
+			sprintf(pubbuf, (uint8_t *)jsonString);
+			m.payload = pubbuf;
+			m.payloadlen = strlen(m.payload);
+			uartPrintf(_DEF_CH1,"[ payloadlen %d ]\r\n", m.payloadlen);
+//			m.payload = (uint8_t *)jsonString;
+//			m.payloadlen = strlen(jsonString);
+
+			rc = MQTTPublish(&c, MQTT_TOPIC, &m);
+			uartPrintf(_DEF_CH1,"-----------------------------------------\r\n");
+			uartPrintf(_DEF_CH1,"\r");
+			uartPrintf(_DEF_CH1,">>[ Published result :sucess %d ]\r\n", rc);
+			uartPrintf(_DEF_CH1,"\r");
+
+			//if(rc == 0){
+			//	ledToggle(_DEF_CH1);
+			//}
+
+#if 1
+			if(rc == -1){
+				uartPrintf(_DEF_CH1,"[ Published failed... ]\r\n");
+				MQTTDisconnect(&c);
+				NVIC_SystemReset();
+			}
+#endif
+			cJSON_Delete(root);
+			free(jsonString);
+		}
+        #endif
+
+    }
+}
+
+void messageArrived(MessageData* md)
+{
+    MQTTMessage* message = md->message;
+
+    char payload[message->payloadlen + 1];
+    memcpy(payload, message->payload, message->payloadlen);
+    payload[message->payloadlen] = '\0';
+    uartPrintf(_DEF_CH1,">>[ Message arrived on topic %.*s: %s ]\r\n", 
+               md->topicName->lenstring.len, md->topicName->lenstring.data, payload);
+
+    parseSimpleMessage(payload);
+}
+
+void parseSimpleMessage(const char* payload)
+{
+    cJSON * root = cJSON_CreateObject();
+    cJSON_AddItemToObject(root,"id", cJSON_CreateString((const char*)MQTTP_CLIENT_ID));
+
+    if (strcmp(payload, "ON") == 0) {
+        HAL_GPIO_WritePin(R_CTR_GPIO_Port, R_CTR_Pin, GPIO_PIN_SET);    // 릴레이 핀 High 출력
+        cJSON_AddItemToObject(root,"st", cJSON_CreateString("ON"));
+        uartPrintf(_DEF_CH1, "Relay State: ON\r\n");
+    } 
+    else if (strcmp(payload, "OFF") == 0) {
+        HAL_GPIO_WritePin(R_CTR_GPIO_Port, R_CTR_Pin, GPIO_PIN_RESET);  // 릴레이 핀 Low 출력
+        cJSON_AddItemToObject(root,"st", cJSON_CreateString("OFF"));
+        uartPrintf(_DEF_CH1, "Relay State: OFF\r\n");
+    }else {
+        cJSON_Delete(root);
+        return;
+    }
+
+    char *jsonString = cJSON_Print(root);
+
+    if (jsonString != NULL) {
+        MQTTMessage m;
+        m.qos = QOS0;
+        m.retained = 0;
+        m.dup = 0;
+        m.payload = (void*)jsonString;
+        m.payloadlen = strlen(jsonString);
+
+        // 3. 서버로 전송 (구독 중인 토픽과는 다른 'status' 토픽으로 보내는 것이 좋습니다)
+        // 만약 기존 토픽과 동일하게 보내고 싶다면 MQTT_TOPIC 사용
+        MQTTPublish(&c, (char *)MQTT_TOPIC, &m); 
+
+        uartPrintf(_DEF_CH1, ">>[ Sent Status Update ]: %s\r\n", jsonString);
+
+        // 4. 메모리 해제 (매우 중요)
+        free(jsonString); 
+    }
+
+    cJSON_Delete(root);
+}
