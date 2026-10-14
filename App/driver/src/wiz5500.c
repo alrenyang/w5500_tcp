@@ -5,7 +5,8 @@
 #define DEVICE_ID   0
 #define MQTTP_CLIENT_ID  "pan01"  // MQTT Client ID (장비별 고유 ID)
 #define MQTTP_SERVER_PORT  1883      // MQTT 서버 포트
-const uint8_t MQTT_TOPIC[]="greenpan/01"; // MQTT Topic (장비별 고유 Topic)
+const uint8_t MQTT_TOPIC_SUBSCRIBE[]="greenpan/01/cmd"; // MQTT Topic 구독
+const uint8_t MQTT_TOPIC_PUBLISH[]="greenpan/01/status"; // MQTT Topic 발행
 // 장비별 네트워크 정보 테이블 정의
 typedef struct {
     uint8_t mac[6];
@@ -95,6 +96,7 @@ wiz_NetInfo gWIZNETINFO  = {
 #define PUBLISH_MYSELF 0
 
 MQTTClient c;
+Network n;
 
 const uint8_t URL[] = "www.google.com";
 uint8_t dns_server_ip[4] = {168,126,63,1};
@@ -286,64 +288,52 @@ void DnsInit(void)
 void MqttRun(void)
  {
 	int rc = 0;
-	uint8_t buf[1024] = {0,};
-	
-	Network n;
+	static uint8_t buf[1024];
+    uint32_t ck_timer;
 	
     #if PUBLISH_MYSELF == 1
     uint8_t pubbuf[1024] = {0,};
 	MQTTMessage m;
-	uint32_t ck_timer;
+
 	uint32_t dist;
 	uint32_t adc_raw;
     #endif
 
 
-    uartPrintf(_DEF_CH1,">>Mqtt Run...\r\n");
+    uartPrintf(_DEF_CH1,">>Mqtt Thread Started...\r\n");
 
     NewNetwork(&n, 0);
 	HAL_Delay(100);
 
-    HAL_Delay(100);
-    uint8_t Error = ConnectNetwork(&n, targetIP, MQTTP_SERVER_PORT);
-    HAL_Delay(100);
-
-    if(Error == SOCK_OK)
-	{
-		uartPrintf(_DEF_CH1, ">>[ ConnectNetwork... ]\n\r");
-		uartPrintf(_DEF_CH1, "\r");
-	}
-	else
-	{
-		while(1)
-		{
-			uartPrintf(_DEF_CH1, ">>[ ConnectNetwork Error... ]\n\r");
-			NVIC_SystemReset();
-			//forever loop wdg call
-		}
-	}
+    int retry_cnt = 0;
+    while (ConnectNetwork(&n, targetIP, MQTTP_SERVER_PORT) != SOCK_OK) {
+        uartPrintf(_DEF_CH1, "Connect Retry... %d\n", ++retry_cnt);
+        HAL_Delay(5000); // 5초 대기 (모뎀 부팅 대기)
+        if(retry_cnt > 20) NVIC_SystemReset(); // 100초 넘게 안되면 리셋
+    }
 
     MQTTClientInit(&c, &n, 1000, buf, sizeof(buf), tempBuffer, sizeof(tempBuffer));
 	HAL_Delay(100);
 
 	MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
-	data.willFlag = 0;
-	data.MQTTVersion = 3;
+	// data.willFlag = 0;
+	// data.MQTTVersion = 3;
 	data.clientID.cstring = (char *)opts.clientid;
-	data.username.cstring = (char *)opts.username;
-	data.password.cstring = (char *)opts.password;
+	// data.username.cstring = (char *)opts.username;
+	// data.password.cstring = (char *)opts.password;
 
 	data.keepAliveInterval = 60;
-	//data.keepAliveInterval = 80;
 	data.cleansession = 1;
 
-    rc = MQTTConnect(&c, &data);
-	HAL_Delay(100);
-	uartPrintf(_DEF_CH1,">>[ Connected Mqtt server ]...%d\r\n", rc);
-	opts.showtopics = 1;
+    if ((rc = MQTTConnect(&c, &data)) != 0) {
+        uartPrintf(_DEF_CH1, "MQTT Connect Failed: %d\n", rc);
+        NVIC_SystemReset();
+    }
 
-    uartPrintf(_DEF_CH1,">>[ Subscribing to %s ]\r\n", MQTT_TOPIC);
-	rc = MQTTSubscribe(&c, (char *)MQTT_TOPIC, opts.qos, messageArrived);
+	uartPrintf(_DEF_CH1,">>[ Connected Mqtt server ]...%d\r\n", rc);
+
+    uartPrintf(_DEF_CH1,">>[ Subscribing to %s ]\r\n", MQTT_TOPIC_SUBSCRIBE);
+	rc = MQTTSubscribe(&c, (char *)MQTT_TOPIC_SUBSCRIBE, opts.qos, messageArrived);
 	uartPrintf(_DEF_CH1,">>[ Subscribed %d ]\r\n", rc);
 
     #if PUBLISH_MYSELF == 1
@@ -354,12 +344,25 @@ void MqttRun(void)
 	ck_timer = millis();
 	#endif
 
+    ck_timer = millis();
+
     while(1)
 	{
-		MQTTYield(&c, data.keepAliveInterval);
+		// MQTTYield(&c, data.keepAliveInterval);
+        rc =MQTTYield(&c, 100);
 
-		#if PUBLISH_MYSELF == 1
+        if (rc != 0) {
+            uartPrintf(_DEF_CH1, ">> MQTT Disconnected (rc: %d). Resetting...\n", rc);
+            HAL_Delay(1000);
+            NVIC_SystemReset(); // 시스템 재시작을 통해 다시 접속 시도
+        }
 
+		
+        if(ck_timer + 60000 < millis())
+		{
+            ledToggle();
+        }
+#if PUBLISH_MYSELF == 1
 		if(ck_timer + 60000 < millis())
 		{
 			//uartPrintf(_DEF_CH1,"time check to %d\r\n", ck_timer);
@@ -410,8 +413,7 @@ void MqttRun(void)
 			cJSON_Delete(root);
 			free(jsonString);
 		}
-        #endif
-
+#endif
     }
 }
 
@@ -430,42 +432,46 @@ void messageArrived(MessageData* md)
 
 void parseSimpleMessage(const char* payload)
 {
-    cJSON * root = cJSON_CreateObject();
-    cJSON_AddItemToObject(root,"id", cJSON_CreateString((const char*)MQTTP_CLIENT_ID));
+    bool relay_changed = false;
+    const char* status_str = "";
+
 
     if (strcmp(payload, "ON") == 0) {
         HAL_GPIO_WritePin(R_CTR_GPIO_Port, R_CTR_Pin, GPIO_PIN_SET);    // 릴레이 핀 High 출력
-        cJSON_AddItemToObject(root,"st", cJSON_CreateString("ON"));
+        status_str = "ON";
+        relay_changed = true;
         uartPrintf(_DEF_CH1, "Relay State: ON\r\n");
     } 
     else if (strcmp(payload, "OFF") == 0) {
         HAL_GPIO_WritePin(R_CTR_GPIO_Port, R_CTR_Pin, GPIO_PIN_RESET);  // 릴레이 핀 Low 출력
-        cJSON_AddItemToObject(root,"st", cJSON_CreateString("OFF"));
         uartPrintf(_DEF_CH1, "Relay State: OFF\r\n");
-    }else {
+        status_str = "OFF";
+        relay_changed = true;
+    }
+
+    if (relay_changed) {
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddStringToObject(root, "id", (char*)opts.clientid);
+        cJSON_AddStringToObject(root, "st", status_str);
+
+        char *jsonString = cJSON_Print(root);
+
+        if (jsonString != NULL) {
+            MQTTMessage m;
+            m.qos = QOS0;
+            m.retained = 0;
+            m.dup = 0;
+            m.payload = (void*)jsonString;
+            m.payloadlen = strlen(jsonString);
+
+            MQTTPublish(&c, (char *)MQTT_TOPIC_PUBLISH, &m); 
+
+            uartPrintf(_DEF_CH1, ">>[ Sent Status Update ]: %s\r\n", jsonString);
+
+            //메모리 해제 (매우 중요)
+            free(jsonString); 
+        }
+
         cJSON_Delete(root);
-        return;
     }
-
-    char *jsonString = cJSON_Print(root);
-
-    if (jsonString != NULL) {
-        MQTTMessage m;
-        m.qos = QOS0;
-        m.retained = 0;
-        m.dup = 0;
-        m.payload = (void*)jsonString;
-        m.payloadlen = strlen(jsonString);
-
-        // 3. 서버로 전송 (구독 중인 토픽과는 다른 'status' 토픽으로 보내는 것이 좋습니다)
-        // 만약 기존 토픽과 동일하게 보내고 싶다면 MQTT_TOPIC 사용
-        MQTTPublish(&c, (char *)MQTT_TOPIC, &m); 
-
-        uartPrintf(_DEF_CH1, ">>[ Sent Status Update ]: %s\r\n", jsonString);
-
-        // 4. 메모리 해제 (매우 중요)
-        free(jsonString); 
-    }
-
-    cJSON_Delete(root);
 }

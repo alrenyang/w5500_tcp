@@ -48,16 +48,11 @@ void apMain(void)
       if (millis()-pre_time >= 500)
       {
           pre_time = millis();
-          ledToggle();
+          // ledToggle();
       }
 
       cliMain();
   }
-}
-
-void ledToggle(void)
-{
-	HAL_GPIO_TogglePin(LED_CRT_GPIO_Port, LED_CRT_Pin);
 }
 
 

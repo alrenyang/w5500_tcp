@@ -6,7 +6,7 @@
  */
 
 #include "util.h"
-
+#include "main.h"
 
 void delay(uint32_t time_ms)
 {
@@ -16,4 +16,10 @@ void delay(uint32_t time_ms)
 uint32_t millis(void)
 {
   return HAL_GetTick();
+}
+
+
+void ledToggle(void)
+{
+	HAL_GPIO_TogglePin(LED_CRT_GPIO_Port, LED_CRT_Pin);
 }
